@@ -1,9 +1,10 @@
-{-# LANGUAGE LambdaCase, OverloadedStrings #-}
+{-# LANGUAGE LambdaCase, OverloadedStrings, NamedFieldPuns #-}
 module Slick.Protocol where
 
 import           Control.Applicative
 import           Control.Monad
 import           Data.Aeson          hiding (Error)
+import qualified Data.HashMap.Strict as HM
 import qualified Data.Text           as T
 import qualified Data.Vector         as V
 
@@ -14,6 +15,7 @@ data ToClient
   = Replace Span FilePath String
   | SetInfoWindow String
   | SetCursor Pos
+  | CurrentHoleEnv HoleEnv
   | Ok
   | Error String
   | Stop
@@ -21,14 +23,29 @@ data ToClient
 
 instance ToJSON ToClient where
   toJSON = \case
-    Replace sp p t  -> Array $ V.fromList [toJSON (str "Replace"), toJSON sp, toJSON p, toJSON t]
-    SetInfoWindow t -> Array $ V.fromList [toJSON (str "SetInfoWindow"), toJSON t]
-    SetCursor pos   -> Array $ V.fromList [toJSON (str "SetCursor"), toJSON pos]
-    Ok              -> Array $ V.fromList [toJSON (str "Ok")]
-    Error t         -> Array $ V.fromList [toJSON (str "Error"), toJSON t]
-    Stop            -> Array $ V.fromList [toJSON (str "Stop")]
-    where
-    str x = x :: String
+    Replace sp p t     -> tag "Replace"        [toJSON sp, toJSON p, toJSON t]
+    SetInfoWindow t    -> tag "SetInfoWindow"  [toJSON t]
+    SetCursor pos      -> tag "SetCursor"      [toJSON pos]
+    CurrentHoleEnv env -> tag "CurrentHoleEnv" [toJSON env]
+    Ok                 -> tag "Ok"             []
+    Error t            -> tag "Error"          [toJSON t]
+    Stop               -> tag "Stop"           []
+    where tag :: String -> [Value] -> Value
+          tag name values = Array . V.fromList $ toJSON name : values
+    
+
+
+-- | A rich representation of a hole's environment which contains the
+-- goal (ie expected type) and relevant visible bindings.
+data HoleEnv = HoleEnv
+  { goal :: (String, String)
+  , bindings :: [(String, String)]
+  }
+  deriving (Show)
+
+instance ToJSON HoleEnv where
+  toJSON HoleEnv { goal, bindings } =
+    Object $ HM.fromList [("goal", toJSON goal), ("bindings", toJSON bindings)]
 
 type Var = String
 
@@ -55,6 +72,7 @@ data FromClient
   | NextHole ClientState
   | PrevHole ClientState
   | GetEnv ClientState
+  | GetEnvJSON ClientState
   | Refine String ClientState
   | GetType String
   | CaseFurther Var ClientState
@@ -71,6 +89,7 @@ instance FromJSON FromClient where
       [String "NextHole", state]                -> NextHole <$> parseJSON state
       [String "PrevHole", state]                -> PrevHole <$> parseJSON state
       [String "GetEnv", state]                  -> GetEnv <$> parseJSON state
+      [String "GetEnvJSON", state]              -> GetEnvJSON <$> parseJSON state
       [String "Refine", String expr, state]     -> Refine (T.unpack expr) <$> parseJSON state
       [String "GetType", String e]              -> return . GetType $ T.unpack e
       [String "SendStop"]                       -> return SendStop
