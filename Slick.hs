@@ -10,24 +10,28 @@ import qualified Data.ByteString.Lazy.Char8 as LB8
 import           Data.IORef
 import qualified Data.List                  as List
 import qualified Data.Map                   as M
+import           Data.Maybe                 (isNothing)
 import qualified Data.Set                   as S
 import qualified DynFlags
+
 import           ErrUtils                   (pprErrMsgBag)
 import           Exception
 import           FastString                 (fsLit)
 import           GHC                        hiding (exprType)
 import           GHC.Paths
 import           HscTypes                   (srcErrorMessages)
+import           Name
 import           Outputable
 import           System.Directory           (getHomeDirectory,
-                                             getModificationTime)
+                                            getModificationTime)
 import           System.FilePath
 import           System.IO
 import           UniqSupply                 (mkSplitUniqSupply)
 
 import           Slick.Case
 import           Slick.GhcUtil
-import qualified Slick.Holes                as Holes
+import qualified Slick.Holes
+import qualified Slick.Init
 import           Slick.ParseHoleMessage     (parseHoleInfo)
 import           Slick.Protocol
 import           Slick.ReadType
@@ -35,7 +39,11 @@ import           Slick.Refine
 import           Slick.Types
 import           Slick.Util
 
--- Get module name from file text
+-- TODO: Need better error messages. For now any load failure gives
+-- "Cannot add module MODULENAME to context: not a home module"
+
+-- TODO: Get module name from file text, or at least don't use basename
+-- since it's wrong.
 parseModuleAt :: GhcMonad m => FilePath -> m ParsedModule
 parseModuleAt p =
   GHC.parseModule =<< (getModSummary . mkModuleName $ takeBaseName p)
@@ -112,7 +120,7 @@ loadFile stRef p = eitherThrow =<< lift handled
 setStateForData :: GhcMonad m => IORef SlickState -> FilePath -> (HsModule RdrName, TypecheckedModule) -> m ()
 setStateForData stRef path (hsModule, typecheckedModule) = do
   modifyTimeAtLastLoad <- liftIO $ getModificationTime path
-  let argHoles = Holes.argHoles hsModule
+  let argHoles = Slick.Holes.argHoles hsModule
   gModifyIORef stRef (\st -> st
     { fileData    = Just (FileData {path, hsModule, typecheckedModule, modifyTimeAtLastLoad})
     , currentHole = Nothing
@@ -168,6 +176,7 @@ respond' stRef = \case
 
   GetEnv ClientState {..} -> do
     HoleInfo {..} <- getHoleInfo stRef
+
     let goalStr = "Goal: " ++ holeName ++ " :: " ++ holeTypeStr ++ "\n" ++ replicate 40 '-'
         envVarTypes = map (\(x,t) -> x ++ " :: " ++ t) holeEnv
 
@@ -244,8 +253,8 @@ main = do
     hSetBuffering stdout NoBuffering
     hPutStrLn logFile "Testing, testing"
     runGhc (Just libdir) $ do
-      ghcInit stRef
-      -- Init.init stRef
+      -- ghcInit stRef
+      Slick.Init.init stRef
       logS stRef "init'd"
       forever $ do
         ln <- liftIO B.getLine
@@ -285,6 +294,11 @@ runWithTestRef x = do
     r <- newIORef =<< initialState logFile
     run $ do { ghcInit r; x r }
 
+runWithTestRef' x = do
+  home <- getHomeDirectory
+  withFile (home </> "prog/slick/testlog") WriteMode $ \logFile -> do
+    r <- newIORef =<< initialState logFile
+    run $ do { Slick.Init.init r; x r }
 
 run :: Ghc a -> IO a
 run = runGhc (Just libdir)

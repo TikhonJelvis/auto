@@ -1,60 +1,71 @@
-{-# LANGUAGE LambdaCase, RecordWildCards, FlexibleContexts, ConstraintKinds #-}
-module Init (Init.init) where
+{-# LANGUAGE ConstraintKinds, FlexibleContexts, LambdaCase,
+             RecordWildCards, ScopedTypeVariables #-}
+module Slick.Init where
 
-import qualified ParseHoleMessage
-import Outputable
-import Data.List (intercalate)
-import Types
-import Util
-import GHC
-import Data.IORef
-import Language.Haskell.GhcMod.Internal hiding (getCompilerOptions)
+import           Data.IORef
+import           Data.List                                     (intercalate)
+import           GHC
+import           Language.Haskell.GhcMod.Internal              hiding (getCompilerOptions,
+                                                                parseCabalFile)
+import           Outputable
+import qualified Slick.ParseHoleMessage
+import           Slick.Types
+import           Slick.Util
 -- I had to write my own "getCompilerOptions" and "parseCabalFile"
 -- since the ghcmod versions die on new binary format cabal files.
-import Language.Haskell.GhcMod
-import DynFlags
-import Control.Applicative
-import Control.Monad
-import qualified Data.Map as M
-import qualified Data.Set as S
-import GhcMonad
-import Control.Monad.Error
+import           Control.Applicative
 import qualified Control.Exception
+import           Control.Monad
+import           Control.Monad.Error
+import qualified Data.Map                                      as M
+import qualified Data.Set                                      as S
+import           DynFlags
+import           GhcMonad
+import           Language.Haskell.GhcMod
 
-import qualified Distribution.PackageDescription as P
-import Distribution.Simple.Compiler (CompilerId(..), CompilerFlavor(..))
-import qualified Distribution.Package as C
-import Distribution.Simple.Program as C (ghcProgram)
-import Distribution.PackageDescription.Configuration (finalizePackageDescription)
-import Distribution.PackageDescription.Parse (readPackageDescription)
-import Distribution.Verbosity as Verbosity
-import Distribution.System (buildPlatform)
-import Distribution.Simple.LocalBuildInfo (configFlags)
-import Data.Version(Version)
-import Distribution.Simple.Program.Types (programName, programFindVersion)
+import qualified Distribution.Package                          as C
+import qualified Distribution.PackageDescription               as P
+import           Distribution.PackageDescription.Configuration (finalizePackageDescription)
+import           Distribution.PackageDescription.Parse         (readPackageDescription)
+import           Distribution.Simple.Compiler                  (CompilerFlavor (..),
+                                                                CompilerId (..))
+import           Distribution.Simple.Program                   as C (ghcProgram)
+import           Distribution.System                           (buildPlatform)
+import           Distribution.Verbosity                        as Verbosity
+-- import Distribution.Simple.LocalBuildInfo (configFlags)
+import           Data.Version                                  (Version)
+import           Distribution.PackageDescription               (FlagAssignment)
+import           Distribution.Simple.Program.Types             (programFindVersion,
+                                                                programName)
+
+import qualified System.IO.Strict
 
 -- Imports for setupConfigFile
-import Distribution.Simple.BuildPaths (defaultDistPref)
-import Distribution.Simple.Configure (localBuildInfoFile)
-import Distribution.Text (display)
+import           Distribution.Simple.BuildPaths                (defaultDistPref)
+import           Distribution.Simple.Configure                 (localBuildInfoFile)
+import           Distribution.Text                             (display)
 
-import System.Directory
-import System.FilePath ((</>))
-import System.Process
-import System.Exit
-import Exception
+import           Exception
+import           System.Directory
+import           System.Exit
+import           System.FilePath                               ((</>))
+import           System.Process
 
 -- Imports for cabalConfigDependencies
-import qualified CabalVersions.Cabal16 as C16
-import qualified CabalVersions.Cabal18 as C18
-import qualified CabalVersions.Cabal21 as C21
-import Data.List (find,tails,isPrefixOf,isInfixOf,nub,stripPrefix,splitAt)
-import Data.List.Split (splitOn)
-import Text.Read (readEither, readMaybe)
-import Distribution.Package (InstalledPackageId(..)
-                           , PackageIdentifier(..)
-                           , PackageName(..))
-import Distribution.Simple.LocalBuildInfo (ComponentName)
+import qualified CabalVersions.Cabal16                         as C16
+import qualified CabalVersions.Cabal18                         as C18
+import qualified CabalVersions.Cabal21                         as C21
+import qualified CabalVersions.Cabal22                         as C22
+import           Data.List                                     (find, isInfixOf,
+                                                                isPrefixOf, nub,
+                                                                splitAt,
+                                                                stripPrefix,
+                                                                tails)
+import           Data.List.Split                               (splitOn)
+import           Distribution.Package                          (InstalledPackageId (..), PackageIdentifier (..), PackageName (..))
+import           Distribution.Simple.LocalBuildInfo            (ComponentName)
+import           Text.Read                                     (readEither,
+                                                                readMaybe)
 
 -- TODO: I really should have just copied to ghcmod source to this
 -- directory and used it directly. God willing I will never have
@@ -91,10 +102,14 @@ POSSIBILITY OF SUCH DAMAGE. -}
 init :: GhcMonad m => IORef SlickState -> m ()
 init stRef = initializeWithCabal stRef defaultOptions
 
+runGhcModT'' opt mx = do
+  env <- newGhcModEnv opt =<< getCurrentDirectory
+  (orErr, _log) <- runGhcModT' env defaultState mx
+  return $ fmap fst orErr
+
 initializeWithCabal :: GhcMonad m => IORef SlickState -> Options -> m ()
 initializeWithCabal stRef opt = do
   c <- liftIO findCradle
-  logS stRef "Found cradle"
   case cradleCabalFile c of
     Nothing ->
       let wdir       = cradleCurrentDir c
@@ -108,9 +123,9 @@ initializeWithCabal stRef opt = do
       setOptions stRef opt compOpts
 
     Just cab -> do
-      logS stRef "Cabal file was found"
-      (compOptsErr, _) <- liftIO . runGhcModT opt $
+      compOptsErr <- liftIO . runGhcModT'' opt $ do
         getCompilerOptions ghcOpts c =<< parseCabalFile c cab
+
       case compOptsErr of
         Left err -> logS stRef $ "initializeWithCabal error: " ++ show err
         Right compOpts -> setOptions stRef opt compOpts
@@ -131,7 +146,7 @@ setOptions stRef (Options {..}) (CompilerOptions{..}) = do
             -- Here be hacks
             let s = showSDoc fs (withPprStyle sty msg)
             logS stRef s
-            case ParseHoleMessage.parseHoleInfo s of
+            case Slick.ParseHoleMessage.parseHoleInfo s of
               Nothing   -> return ()
               Just info -> modifyIORef stRef (\s ->
                 s { holesInfo = M.insert span info (holesInfo s) })
@@ -165,6 +180,49 @@ ghcDbOpt db
   where s = show db
 
 -- begin implementation of parseCabalFile
+parseCabalFile :: (IOish m, MonadError GhcModError m)
+               => Cradle
+               -> FilePath
+               -> m P.PackageDescription
+parseCabalFile cradle file = do
+    cid <- liftIO getGHCId
+    epgd <- liftIO $ readPackageDescription silent file
+    flags <- cabalConfigFlags cradle
+    case toPkgDesc cid flags epgd of
+        Left deps    -> fail $ show deps ++ " are not installed"
+        Right (pd,_) -> if nullPkg pd
+                        then fail $ file ++ " is broken"
+                        else return pd
+  where
+    toPkgDesc cid flags =
+        finalizePackageDescription flags (const True) buildPlatform cid []
+    nullPkg pd = name == ""
+      where
+        PackageName name = C.pkgName (P.package pd)
+
+getGHCId :: IO CompilerId
+getGHCId = CompilerId GHC <$> getGHC
+
+getGHC :: IO Version
+getGHC = do
+    mv <- programFindVersion C.ghcProgram silent (programName C.ghcProgram)
+    case mv of
+      -- TODO: MonadError it up
+        Nothing -> throwIO $ userError "ghc not found"
+        Just v  -> return v
+
+cabalConfigFlags :: (IOish m, MonadError GhcModError m)
+                 => Cradle
+                 -> m FlagAssignment
+cabalConfigFlags cradle = do
+  config <- getConfig cradle
+  case configFlags config of
+    Right x  -> return x
+    Left msg -> throwError (GMECabalFlags (GMEString msg))
+
+configFlags :: CabalConfig -> Either String FlagAssignment
+configFlags config = readEither =<< flip extractField "configConfigurationsFlags" =<< extractField config "configFlags"
+
 -- The offending function
 getConfig :: (IOish m, MonadError GhcModError m)
           => Cradle
@@ -172,9 +230,9 @@ getConfig :: (IOish m, MonadError GhcModError m)
 getConfig cradle = do
   outOfDate <- liftIO $ isSetupConfigOutOfDate cradle
   when outOfDate configure
-  liftIO (readFile file) `catchError` \_ ->
+  liftIO (System.IO.Strict.readFile file `catch` \(_ :: SomeException) ->
+    readProcess "cabalparse" [file] "")
     -- TODO: A lovely hack can be seen here
-    liftIO $ readProcess "cabalparse" [file] ""
   where
   file   = setupConfigFile cradle
   prjDir = cradleRootDir cradle
@@ -281,7 +339,7 @@ configDependencies :: PackageIdentifier -> CabalConfig -> [Package]
 configDependencies thisPkg config = map fromInstalledPackageId deps
  where
     deps :: [InstalledPackageId]
-    deps = case deps21 `mplus` deps18 `mplus` deps16 of
+    deps = case deps22 `mplus` deps21 `mplus` deps18 `mplus` deps16 of
         Right ps -> ps
         Left msg -> error msg
 
@@ -289,7 +347,24 @@ configDependencies thisPkg config = map fromInstalledPackageId deps
     -- defined in the same package).
     internal pkgid = pkgid == thisPkg
 
-    -- Cabal >= 1.21
+    deps22 :: Either String [InstalledPackageId]
+    deps22 = do
+      (xs :: [(ComponentName, C22.ComponentLocalBuildInfo, [ComponentName])]) <-
+        readEither =<< extractField config "componentsConfigs"
+      return (map fst $ filterInternal22 xs)
+
+    filterInternal22 ccfg =
+      [ (ipkgid, pkgid)
+      | (_,clbi,_)      <- ccfg
+      , (ipkgid, pkgid) <- C22.componentPackageDeps clbi
+      , not (internal . packageIdentifierFrom22 $ pkgid)
+      ]
+
+
+    packageIdentifierFrom22 (C22.PackageIdentifier (C22.PackageName myName) myVersion) =
+        PackageIdentifier (PackageName myName) myVersion
+
+    -- Cabal >= 1.21 && < 1.22
     deps21 :: Either String [InstalledPackageId]
     deps21 =
         map fst

@@ -1,21 +1,20 @@
 {-# LANGUAGE LambdaCase, RecordWildCards #-}
 module Slick.GhcUtil where
 
-import           Bag (Bag, foldrBag)
+import           Bag                 (Bag, foldrBag)
 import           Control.Monad.Error
 import           ErrUtils            (pprErrMsgBag)
 import           GHC                 hiding (exprType)
 import           Name
 import           Outputable          (showSDoc, vcat)
 import           Parser              (parseStmt)
-import           RdrName (RdrName (Exact), extendLocalRdrEnvList)
-import           SrcLoc              (realSrcSpanStart, realSrcSpanEnd)
+import           RdrName             (RdrName (Exact), extendLocalRdrEnvList)
+import           SrcLoc              (realSrcSpanEnd, realSrcSpanStart)
 import           TcRnDriver          (tcRnExpr)
 import           TcRnMonad
 
 import           Slick.Types
 import           Slick.Util
-
 
 exprType :: String -> M Type
 exprType = hsExprType <=< parseExpr
@@ -57,10 +56,12 @@ withTyVarsInScope tvNames inner = do
     (extendLocalRdrEnvList lcl_rdr_env tvNames)
     inner
 
--- withTyVarsInScope' :: [Name] -> TcRn a -> TcRn a
--- withTyVarsInScope' tvNames inner = do
+{-
+withTyVarsInScope' :: [Name] -> TcRn a -> TcRn a
+withTyVarsInScope' tvNames inner = do
 -- check out
 -- RnTypes/bindHsTyVars
+-}
 
 rdrNameToName :: HasOccName name => name -> IOEnv (Env gbl lcl) Name
 rdrNameToName rdrName = do
