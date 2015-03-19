@@ -10,7 +10,6 @@ import qualified Data.ByteString.Lazy.Char8 as LB8
 import           Data.IORef
 import qualified Data.List                  as List
 import qualified Data.Map                   as M
-import           Data.Maybe                 (isNothing)
 import qualified Data.Set                   as S
 import qualified DynFlags
 import           ErrUtils                   (pprErrMsgBag)
@@ -19,7 +18,6 @@ import           FastString                 (fsLit)
 import           GHC                        hiding (exprType)
 import           GHC.Paths
 import           HscTypes                   (srcErrorMessages)
-import           Name
 import           Outputable
 import           System.Directory           (getHomeDirectory,
                                              getModificationTime)
@@ -168,14 +166,16 @@ respond' stRef = \case
       Nothing -> SetInfoWindow "No Hole found"
       Just _  -> Ok
 
-  GetEnv (ClientState {..}) -> do
-    h               <- getCurrentHoleErr stRef
-    _names          <- filter (isNothing . nameModule_maybe) <$> lift getNamesInScope
-    (HoleInfo {..}) <- ((M.! h) . holesInfo) <$> gReadIORef stRef
+  GetEnv ClientState {..} -> do
+    HoleInfo {..} <- getHoleInfo stRef
     let goalStr = "Goal: " ++ holeName ++ " :: " ++ holeTypeStr ++ "\n" ++ replicate 40 '-'
         envVarTypes = map (\(x,t) -> x ++ " :: " ++ t) holeEnv
 
     return (SetInfoWindow $ unlines (goalStr : envVarTypes))
+
+  GetEnvJSON ClientState {..} -> do
+    HoleInfo {..} <- getHoleInfo stRef
+    return . CurrentHoleEnv $ HoleEnv (holeName, holeTypeStr) holeEnv
 
   -- TODO: Switch everything to use error monad
   Refine exprStr (ClientState {..}) -> do
@@ -257,6 +257,11 @@ main = do
             resp <- respond stRef msg
             liftIO $ hPutStrLn logFile ("Giving: " ++ show resp)
             liftIO $ LB8.putStrLn (encode resp)
+
+getHoleInfo :: IORef SlickState -> M HoleInfo
+getHoleInfo stRef = do
+  h <- getCurrentHoleErr stRef
+  ((M.! h) . holesInfo) <$> gReadIORef stRef
 
 initialState :: Handle -> IO SlickState
 initialState logFile = mkSplitUniqSupply 'x' >>| \uniq -> SlickState
