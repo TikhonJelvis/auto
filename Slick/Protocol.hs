@@ -13,6 +13,7 @@ type Span = (Pos, Pos)
 
 data ToClient
   = Replace Span FilePath String
+  | Insert Pos FilePath String
   | SetInfoWindow String
   | SetCursor Pos
   | CurrentHoleEnv HoleEnv
@@ -23,6 +24,7 @@ data ToClient
 
 instance ToJSON ToClient where
   toJSON = \case
+<<<<<<< HEAD
     Replace sp p t     -> tag "Replace"        [toJSON sp, toJSON p, toJSON t]
     SetInfoWindow t    -> tag "SetInfoWindow"  [toJSON t]
     SetCursor pos      -> tag "SetCursor"      [toJSON pos]
@@ -30,10 +32,9 @@ instance ToJSON ToClient where
     Ok                 -> tag "Ok"             []
     Error t            -> tag "Error"          [toJSON t]
     Stop               -> tag "Stop"           []
+    Insert pos p t     -> tag "Insert"         [toJSON pos, toJSON p, toJSON t]
     where tag :: String -> [Value] -> Value
           tag name values = Array . V.fromList $ toJSON name : values
-    
-
 
 -- | A rich representation of a hole's environment which contains the
 -- goal (ie expected type) and relevant visible bindings.
@@ -76,7 +77,7 @@ data FromClient
   | Refine String ClientState
   | GetType String
   | CaseFurther Var ClientState
-  | CaseOn String
+  | CaseOn String ClientState
   | SendStop
   deriving (Show)
 
@@ -85,6 +86,7 @@ instance FromJSON FromClient where
     Array a                                     -> case V.toList a of
       [String "Load", String path]              -> return (Load (T.unpack path))
       [String "CaseFurther", String var, state] -> CaseFurther (T.unpack var) <$> parseJSON state
+      [String "CaseOn", String expr, state]     -> CaseOn (T.unpack expr) <$> parseJSON state
       [String "EnterHole", state]               -> EnterHole <$> parseJSON state
       [String "NextHole", state]                -> NextHole <$> parseJSON state
       [String "PrevHole", state]                -> PrevHole <$> parseJSON state
