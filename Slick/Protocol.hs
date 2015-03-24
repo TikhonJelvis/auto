@@ -24,7 +24,6 @@ data ToClient
 
 instance ToJSON ToClient where
   toJSON = \case
-<<<<<<< HEAD
     Replace sp p t     -> tag "Replace"        [toJSON sp, toJSON p, toJSON t]
     SetInfoWindow t    -> tag "SetInfoWindow"  [toJSON t]
     SetCursor pos      -> tag "SetCursor"      [toJSON pos]
